@@ -9,6 +9,7 @@ using BililiveRecorder.Core.Api;
 using BililiveRecorder.Core.Config;
 using BililiveRecorder.Core.Event;
 using BililiveRecorder.Core.ProcessingRules;
+using BililiveRecorder.Core.Restreaming;
 using BililiveRecorder.Core.Scripting;
 using BililiveRecorder.Flv;
 using BililiveRecorder.Flv.Amf;
@@ -36,11 +37,13 @@ namespace BililiveRecorder.Core.Recording
 
         private ITagGroupReader? reader;
         private IFlvProcessingContextWriter? writer;
+        private IRestreamService? restreamService;
 
         public StandardRecordTask(IRoom room,
                           ILogger logger,
                           IProcessingPipelineBuilder builder,
                           IApiClient apiClient,
+                          IPlatformApiClientFactory platformApiClientFactory,
                           IFlvTagReaderFactory flvTagReaderFactory,
                           ITagGroupReaderFactory tagGroupReaderFactory,
                           IFlvProcessingContextWriterFactory writerFactory,
@@ -48,6 +51,7 @@ namespace BililiveRecorder.Core.Recording
             : base(room: room,
                    logger: logger?.ForContext<StandardRecordTask>().ForContext(LoggingContext.RoomId, room.RoomConfig.RoomId)!,
                    apiClient: apiClient,
+                   platformApiClientFactory: platformApiClientFactory,
                    userScriptRunner: userScriptRunner)
         {
             this.flvTagReaderFactory = flvTagReaderFactory ?? throw new ArgumentNullException(nameof(flvTagReaderFactory));
@@ -93,6 +97,55 @@ namespace BililiveRecorder.Core.Recording
 
         protected override void StartRecordingLoop(Stream stream)
         {
+            // 检查是否启用转推
+            if (this.room.RoomConfig.RestreamEnabled &&
+                !string.IsNullOrWhiteSpace(this.room.RoomConfig.RestreamRtmpUrl) &&
+                !string.IsNullOrWhiteSpace(this.room.RoomConfig.RestreamStreamKey))
+            {
+                try
+                {
+                    this.logger.Information("启用转推功能");
+                    this.restreamService = new FFmpegRestreamService(this.logger);
+                    this.restreamService.ProcessExited += (sender, e) =>
+                    {
+                        this.logger.Warning("转推进程异常退出: {ErrorMessage}", e.ErrorMessage);
+                    };
+
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await this.restreamService.StartAsync(
+                                this.room.RoomConfig.RestreamRtmpUrl,
+                                this.room.RoomConfig.RestreamStreamKey,
+                                this.ct
+                            ).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            this.logger.Error(ex, "启动转推服务失败");
+                        }
+                    });
+
+                    // 等待FFmpeg进程启动
+                    Task.Delay(1000).Wait();
+
+                    // 包装stream以同时写入转推
+                    if (this.restreamService.IsRunning)
+                    {
+                        var restreamInputStream = this.restreamService.GetInputStream();
+                        stream = new TeeStream(stream, restreamInputStream, leaveOpen: true);
+                        this.logger.Information("转推流包装完成");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    this.logger.Error(ex, "设置转推功能失败，将继续录制但不转推");
+                    this.restreamService?.Dispose();
+                    this.restreamService = null;
+                }
+            }
+
             var pipe = new Pipe(new PipeOptions(useSynchronizationContext: false));
 
             this.reader = this.tagGroupReaderFactory.CreateTagGroupReader(this.flvTagReaderFactory.CreateFlvTagReader(pipe.Reader));
@@ -224,6 +277,23 @@ namespace BililiveRecorder.Core.Recording
                 this.reader = null;
                 this.writer?.Dispose();
                 this.writer = null;
+
+                // 停止转推服务
+                if (this.restreamService != null)
+                {
+                    try
+                    {
+                        this.logger.Information("停止转推服务");
+                        _ = this.restreamService.StopAsync().ConfigureAwait(false);
+                        this.restreamService.Dispose();
+                        this.restreamService = null;
+                    }
+                    catch (Exception ex)
+                    {
+                        this.logger.Warning(ex, "停止转推服务时发生错误");
+                    }
+                }
+
                 this.RequestStop();
 
                 this.OnRecordSessionEnded(EventArgs.Empty);
@@ -312,6 +382,7 @@ namespace BililiveRecorder.Core.Recording
                 var state = this.OnNewFile(paths);
 
                 var stream = new FileStream(paths.fullPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
+                FilePermissionHelper.ApplyUmaskPermissions(paths.fullPath, this.task.logger);
                 return (stream, state);
             }
 
@@ -326,6 +397,7 @@ namespace BililiveRecorder.Core.Recording
                 catch (Exception) { }
 
                 var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read);
+                FilePermissionHelper.ApplyUmaskPermissions(path, this.task.logger);
                 return stream;
             }
         }

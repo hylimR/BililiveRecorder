@@ -13,7 +13,7 @@ namespace BililiveRecorder.Core.UnitTests
         {
             Verifier.DerivePathInfo(Expectations.Initialize);
             VerifierSettings.IgnoreMembersWithType<Stream>();
-            DiffRunner.Disabled = false;
+            DiffRunner.Disabled = true;  // Disable auto-launching diff tools to prevent opening VSCode/editors during test runs
             DiffTools.UseOrder(DiffTool.VisualStudioCode, DiffTool.Rider, DiffTool.WinMerge, DiffTool.VisualStudio);
         }
     }

@@ -17,7 +17,7 @@ namespace BililiveRecorder.Core.Event
             this.DanmakuConnected = room.DanmakuConnected;
         }
 
-        public int RoomId { get; protected set; }
+        public long RoomId { get; protected set; }
         public int ShortId { get; protected set; }
         public string Name { get; protected set; } = string.Empty;
         public string Title { get; protected set; } = string.Empty;

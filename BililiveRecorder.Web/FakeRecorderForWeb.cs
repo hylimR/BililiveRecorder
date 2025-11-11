@@ -26,9 +26,13 @@ namespace BililiveRecorder.Web
         public event EventHandler<IRoom>? StreamStarted;
 #pragma warning restore CS0067
 
-        public IRoom AddRoom(int roomid) => null!;
+        public IRoom AddRoom(long roomid) => null!;
 
-        public IRoom AddRoom(int roomid, bool enabled) => null!;
+        public IRoom AddRoom(long roomid, bool enabled) => null!;
+
+        public IRoom AddRoom(string roomUrl) => null!;
+
+        public IRoom AddRoom(string roomUrl, bool enabled) => null!;
 
         public void RemoveRoom(IRoom room)
         { }

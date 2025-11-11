@@ -5,7 +5,7 @@ namespace BililiveRecorder.Web.Models.Rest
     public class RoomDto
     {
         public Guid ObjectId { get; set; }
-        public int RoomId { get; set; }
+        public long RoomId { get; set; }
         public bool AutoRecord { get; set; }
         public int ShortId { get; set; }
         public string? Name { get; set; }
@@ -19,5 +19,9 @@ namespace BililiveRecorder.Web.Models.Rest
         public bool AutoRecordForThisSession { get; set; }
         public RoomRecordingStatsDto RecordingStats { get; set; } = default!;
         public RoomIOStatsDto IoStats { get; set; } = default!;
+
+        // For multi-platform support
+        public string? RoomUrl { get; set; }
+        public string Platform { get; set; } = "Bilibili";
     }
 }

@@ -16,10 +16,12 @@ namespace BililiveRecorder.Core.Recording
         public RawDataRecordTask(IRoom room,
                                  ILogger logger,
                                  IApiClient apiClient,
+                                 IPlatformApiClientFactory platformApiClientFactory,
                                  UserScriptRunner userScriptRunner)
             : base(room: room,
                    logger: logger?.ForContext<RawDataRecordTask>().ForContext(LoggingContext.RoomId, room.RoomConfig.RoomId)!,
                    apiClient: apiClient,
+                   platformApiClientFactory: platformApiClientFactory,
                    userScriptRunner: userScriptRunner)
         {
         }
@@ -46,6 +48,7 @@ namespace BililiveRecorder.Core.Recording
             this.logger.Information("新建录制文件 {Path}", fullPath);
 
             var file = new FileStream(fullPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read);
+            FilePermissionHelper.ApplyUmaskPermissions(fullPath, this.logger);
 
             _ = Task.Run(async () => await this.WriteStreamToFileAsync(stream, file).ConfigureAwait(false));
         }

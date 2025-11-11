@@ -2,7 +2,7 @@ namespace BililiveRecorder.Web.Models.Rest
 {
     public class FileNameTemplateContextDto
     {
-        public int RoomId { get; set; }
+        public long RoomId { get; set; }
         public int ShortId { get; set; }
         public string Name { get; set; } = string.Empty;
         public long Uid { get; set; }

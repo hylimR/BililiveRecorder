@@ -35,6 +35,7 @@ namespace BililiveRecorder.Core.Recording
         protected readonly IRoom room;
         protected readonly ILogger logger;
         protected readonly IApiClient apiClient;
+        protected readonly IPlatformApiClientFactory platformApiClientFactory;
         private readonly FileNameGenerator fileNameGenerator;
         private readonly UserScriptRunner userScriptRunner;
 
@@ -57,11 +58,12 @@ namespace BililiveRecorder.Core.Recording
         private DateTimeOffset ioStatsLastTrigger;
         private TimeSpan durationSinceNoDataReceived;
 
-        protected RecordTaskBase(IRoom room, ILogger logger, IApiClient apiClient, UserScriptRunner userScriptRunner)
+        protected RecordTaskBase(IRoom room, ILogger logger, IApiClient apiClient, IPlatformApiClientFactory platformApiClientFactory, UserScriptRunner userScriptRunner)
         {
             this.room = room ?? throw new ArgumentNullException(nameof(room));
             this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
             this.apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
+            this.platformApiClientFactory = platformApiClientFactory ?? throw new ArgumentNullException(nameof(platformApiClientFactory));
             this.userScriptRunner = userScriptRunner ?? throw new ArgumentNullException(nameof(userScriptRunner));
 
             this.fileNameGenerator = new FileNameGenerator(room.RoomConfig, logger);
@@ -281,19 +283,37 @@ namespace BililiveRecorder.Core.Recording
             return qns;
         }
 
-        protected async Task<(string url, StreamCodecQn codecQn)> FetchStreamUrlAsync(int roomid)
+        protected async Task<(string url, StreamCodecQn codecQn)> FetchStreamUrlAsync(long roomid)
         {
+            // Check if platform-specific API should be used for non-Bilibili platforms
+            if (!string.IsNullOrEmpty(this.room.RoomConfig.RoomUrl))
+            {
+                if (this.room.RoomConfig.Platform != StreamingPlatform.Bilibili)
+                {
+                    return await this.FetchPlatformStreamUrlAsync(this.room.RoomConfig.NormalizedRoomIdentifier, this.room.RoomConfig.Platform).ConfigureAwait(false);
+                }
+                else
+                {
+                    // For Bilibili rooms with RoomUrl, use NormalizedRoomIdentifier instead of roomid parameter
+                    // This ensures we use the correct room ID even if RoomId property hasn't been set/saved yet
+                    if (long.TryParse(this.room.RoomConfig.NormalizedRoomIdentifier, out var bilibiliRoomId))
+                    {
+                        roomid = bilibiliRoomId;
+                    }
+                }
+            }
+
             var allowedQn = ParseAllowedQn(this.room.RoomConfig.RecordingQuality);
 
             // 优先使用用户脚本获取直播流地址
-            if (this.userScriptRunner.CallOnFetchStreamUrl(this.logger, roomid, allowedQn) is { } urlFromScript)
+            if (this.userScriptRunner.CallOnFetchStreamUrl(this.logger, (int)roomid, allowedQn) is { } urlFromScript)
             {
                 this.logger.Information("使用用户脚本返回的直播流地址 {Url}", urlFromScript);
                 return (urlFromScript, new StreamCodecQn { Codec = StreamCodec.AVC, Qn = -1 });
             }
 
             const int DefaultQn = 10000;
-            var codecItems = await this.apiClient.GetCodecItemInStreamUrlAsync(roomid: roomid, qn: DefaultQn).ConfigureAwait(false);
+            var codecItems = await this.apiClient.GetCodecItemInStreamUrlAsync(roomid: (int)roomid, qn: DefaultQn).ConfigureAwait(false);
             //?? throw new Exception("no supported stream url, qn: " + DefaultQn);
 
             var allAvailableCodecQn = new List<StreamCodecQn>();
@@ -335,7 +355,7 @@ namespace BililiveRecorder.Core.Recording
             if (selectedCodecQn.Qn != DefaultQn)
             {
                 // 最终选择的 qn 与默认不同，需要重新请求一次
-                codecItems = await this.apiClient.GetCodecItemInStreamUrlAsync(roomid: roomid, qn: selectedCodecQn.Qn).ConfigureAwait(false);
+                codecItems = await this.apiClient.GetCodecItemInStreamUrlAsync(roomid: (int)roomid, qn: selectedCodecQn.Qn).ConfigureAwait(false);
             }
 
             var item = selectedCodecQn.Codec switch
@@ -365,6 +385,34 @@ namespace BililiveRecorder.Core.Recording
             var fullUrl = url_info.Host + item.BaseUrl + url_info.Extra;
 
             return (fullUrl, new StreamCodecQn { Codec = selectedCodecQn.Codec, Qn = item.CurrentQn });
+        }
+
+        protected async Task<(string url, StreamCodecQn codecQn)> FetchPlatformStreamUrlAsync(string roomIdentifier, StreamingPlatform platform)
+        {
+            this.logger.Information("使用平台 {Platform} API 获取直播流地址", platform);
+
+            using var platformClient = this.platformApiClientFactory.CreateClient(platform);
+
+            // Parse quality from room config
+            var allowedQn = ParseAllowedQn(this.room.RoomConfig.RecordingQuality);
+            var requestedQn = allowedQn.Count > 0 ? allowedQn[0].Qn : 10000;
+
+            var streamInfo = await platformClient.GetStreamUrlAsync(roomIdentifier, requestedQn).ConfigureAwait(false);
+
+            if (string.IsNullOrEmpty(streamInfo.StreamUrl))
+            {
+                throw new Exception($"Failed to get stream URL from platform {platform}");
+            }
+
+            this.logger.Information("成功获取 {Platform} 直播流地址: {Url}, 画质: {Quality}, 格式: {Format}",
+                platform, streamInfo.StreamUrl, streamInfo.Quality, streamInfo.Format);
+
+            // Return stream URL with codec info
+            return (streamInfo.StreamUrl, new StreamCodecQn
+            {
+                Codec = streamInfo.Format == StreamFormat.HLS ? StreamCodec.AVC : StreamCodec.AVC,
+                Qn = streamInfo.QualityNumber
+            });
         }
 
         protected async Task<Stream> GetStreamAsync(string fullUrl, int timeout)
@@ -481,6 +529,20 @@ namespace BililiveRecorder.Core.Recording
                             resp.Dispose();
                             streamHostInfoBuilder.Append('\n');
                             break;
+                        }
+                    case HttpStatusCode.NotFound:
+                        {
+                            // 404 - Common when streamer opens room but hasn't started OBS yet
+                            this.logger.Information("直播流暂时不可用 (404 Not Found)，可能主播还未开始推流，将自动重试");
+                            throw new Exception("直播流暂时不可用，主播可能还未开始推流");
+                        }
+                    case HttpStatusCode.ServiceUnavailable:
+                    case HttpStatusCode.BadGateway:
+                    case HttpStatusCode.GatewayTimeout:
+                        {
+                            // 503/502/504 - Temporary server issues, common during stream startup
+                            this.logger.Information("服务器暂时不可用 ({StatusCode})，可能正在准备直播流，将自动重试", resp.StatusCode);
+                            throw new Exception($"服务器暂时不可用 ({(int)resp.StatusCode})，可能正在准备直播流");
                         }
                     default:
                         throw new Exception(string.Format("尝试下载直播流时服务器返回了 ({0}){1}", resp.StatusCode, resp.ReasonPhrase));

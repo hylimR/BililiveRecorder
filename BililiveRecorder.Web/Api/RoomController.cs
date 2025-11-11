@@ -24,7 +24,7 @@ namespace BililiveRecorder.Web.Api
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private IRoom? FetchRoom(int roomId) => this.recorder.Rooms.FirstOrDefault(x => x.ShortId == roomId || x.RoomConfig.RoomId == roomId);
+        private IRoom? FetchRoom(long roomId) => this.recorder.Rooms.FirstOrDefault(x => x.ShortId == roomId || x.RoomConfig.RoomId == roomId);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private IRoom? FetchRoom(Guid objectId) => this.recorder.Rooms.FirstOrDefault(x => x.ObjectId == objectId);
@@ -48,19 +48,148 @@ namespace BililiveRecorder.Web.Api
         [ProducesResponseType(typeof(RestApiError), StatusCodes.Status400BadRequest)]
         public ActionResult<RoomDto> CreateRoom([FromBody] CreateRoomDto createRoom)
         {
-            if (createRoom.RoomId <= 0)
-                return this.BadRequest(new RestApiError { Code = RestApiErrorCode.RoomidOutOfRange, Message = "Roomid must be greater than 0." });
+            IRoom? room = null;
+            var input = createRoom.RoomUrl?.Trim();
 
-            var room = this.FetchRoom(createRoom.RoomId);
+            if (string.IsNullOrWhiteSpace(input) && !createRoom.RoomId.HasValue)
+            {
+                return this.BadRequest(new RestApiError { Code = RestApiErrorCode.RoomidOutOfRange, Message = "Either RoomId or RoomUrl must be provided." });
+            }
 
+            long? parsedRoomId = null;
+            string? originalUrl = null;
+
+            // Parse the input to extract room ID and preserve original URL
+            if (!string.IsNullOrWhiteSpace(input))
+            {
+                originalUrl = input; // Store the original URL as provided by user
+
+                // Try to parse as integer first (for plain numeric input - assume Bilibili)
+                if (long.TryParse(input, out var roomIdFromString))
+                {
+                    if (roomIdFromString <= 0)
+                        return this.BadRequest(new RestApiError { Code = RestApiErrorCode.RoomidOutOfRange, Message = "Roomid must be greater than 0." });
+
+                    parsedRoomId = roomIdFromString;
+                    // For plain numeric input, construct a proper Bilibili URL
+                    originalUrl = $"https://live.bilibili.com/{roomIdFromString}";
+                }
+                else
+                {
+                    // Try to extract Bilibili room ID from URL
+                    var bilibiliMatch = RoomIdFromUrl.Regex.Match(input);
+                    if (bilibiliMatch.Success && bilibiliMatch.Groups.Count > 1 && long.TryParse(bilibiliMatch.Groups[1].Value, out var bilibiliRoomId))
+                    {
+                        // It's a Bilibili URL - extract room ID but keep original URL
+                        parsedRoomId = bilibiliRoomId;
+                        // originalUrl already set to input
+                    }
+                    else
+                    {
+                        // Try to extract Douyin room ID from various URL formats
+                        var douyinPatterns = new[]
+                        {
+                            @"live\.douyin\.com/(\d+)", // https://live.douyin.com/123456789
+                            @"v\.douyin\.com/[^/]+.*?roomId[=:](\d+)", // v.douyin.com/xxx?roomId=123
+                            @"webcast\.amemv\.com.*?room_id[=:](\d+)", // webcast.amemv.com/xxx?room_id=123
+                            @"douyin\.com.*?roomId[=:](\d+)" // any douyin.com URL with roomId parameter
+                        };
+
+                        foreach (var pattern in douyinPatterns)
+                        {
+                            var douyinMatch = System.Text.RegularExpressions.Regex.Match(input, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            if (douyinMatch.Success && douyinMatch.Groups.Count > 1 && long.TryParse(douyinMatch.Groups[1].Value, out var douyinRoomId))
+                            {
+                                // It's a Douyin URL with numeric room ID - extract room ID but keep original URL
+                                parsedRoomId = douyinRoomId;
+                                // originalUrl already set to input
+                                break;
+                            }
+                        }
+
+                        // If no room ID extracted, that's okay - we'll use the URL as-is
+                        // This handles cases like v.douyin.com/xxx short URLs without extractable IDs
+                    }
+                }
+            }
+            // Fallback to RoomId if provided directly (legacy support)
+            else if (createRoom.RoomId.HasValue)
+            {
+                if (createRoom.RoomId.Value <= 0)
+                    return this.BadRequest(new RestApiError { Code = RestApiErrorCode.RoomidOutOfRange, Message = "Roomid must be greater than 0." });
+
+                parsedRoomId = createRoom.RoomId.Value;
+                originalUrl = $"https://live.bilibili.com/{createRoom.RoomId.Value}";
+            }
+
+            // Check for existing room by room ID or URL
+            if (parsedRoomId.HasValue)
+            {
+                room = this.FetchRoom(parsedRoomId.Value);
+            }
+
+            if (room == null && !string.IsNullOrWhiteSpace(originalUrl))
+            {
+                room = this.recorder.Rooms.FirstOrDefault(x =>
+                    x.RoomConfig.RoomUrl == originalUrl ||
+                    x.RoomConfig.NormalizedRoomIdentifier == originalUrl);
+            }
+
+            // Update existing room or create new one
             if (room is not null)
             {
+                // Update AutoRecord setting if changed
                 if (room.RoomConfig.AutoRecord != createRoom.AutoRecord)
                     room.RoomConfig.AutoRecord = createRoom.AutoRecord;
+
+                // Update RoomUrl if it's not already set - store the original URL
+                if (string.IsNullOrEmpty(room.RoomConfig.RoomUrl) && !string.IsNullOrWhiteSpace(originalUrl))
+                    room.RoomConfig.RoomUrl = originalUrl;
+
+                // Update RoomId if it's not already set and we have a parsed ID
+                if (room.RoomConfig.RoomId == 0 && parsedRoomId.HasValue)
+                    room.RoomConfig.RoomId = parsedRoomId.Value;
+
+                this.recorder.SaveConfig();
             }
             else
             {
-                room = this.recorder.AddRoom(createRoom.RoomId, createRoom.AutoRecord);
+                // Create new room - prefer using string URL for multi-platform support
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(originalUrl))
+                    {
+                        // Use URL-based AddRoom with original URL
+                        room = this.recorder.AddRoom(originalUrl, createRoom.AutoRecord);
+
+                        // Then set RoomId if we have a numeric ID extracted from URL
+                        if (parsedRoomId.HasValue && room.RoomConfig.RoomId == 0)
+                        {
+                            room.RoomConfig.RoomId = parsedRoomId.Value;
+                            this.recorder.SaveConfig();
+                        }
+                    }
+                    else if (parsedRoomId.HasValue)
+                    {
+                        // Fallback to ID-based AddRoom (legacy, for Bilibili only)
+                        room = this.recorder.AddRoom(parsedRoomId.Value, createRoom.AutoRecord);
+
+                        // Then set RoomUrl with original URL
+                        if (!string.IsNullOrWhiteSpace(originalUrl) && string.IsNullOrEmpty(room.RoomConfig.RoomUrl))
+                        {
+                            room.RoomConfig.RoomUrl = originalUrl;
+                            this.recorder.SaveConfig();
+                        }
+                    }
+                    else
+                    {
+                        return this.BadRequest(new RestApiError { Code = RestApiErrorCode.RoomidOutOfRange, Message = "Could not parse room identifier from input." });
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    return this.BadRequest(new RestApiError { Code = RestApiErrorCode.RoomidOutOfRange, Message = $"Failed to add room: {ex.Message}" });
+                }
             }
 
             return this.mapper.Map<RoomDto>(room);
@@ -71,10 +200,10 @@ namespace BililiveRecorder.Web.Api
         /// </summary>
         /// <param name="roomId"></param>
         /// <returns></returns>
-        [HttpDelete("{roomId:int}")]
+        [HttpDelete("{roomId:long}")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(RestApiError), StatusCodes.Status404NotFound)]
-        public ActionResult<RoomDto> DeleteRoom(int roomId)
+        public ActionResult<RoomDto> DeleteRoom(long roomId)
         {
             var room = this.FetchRoom(roomId);
 
@@ -114,10 +243,10 @@ namespace BililiveRecorder.Web.Api
         /// </summary>
         /// <param name="roomId"></param>
         /// <returns></returns>
-        [HttpGet("{roomId:int}")]
+        [HttpGet("{roomId:long}")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(RestApiError), StatusCodes.Status404NotFound)]
-        public ActionResult<RoomDto> GetRoom(int roomId)
+        public ActionResult<RoomDto> GetRoom(long roomId)
         {
             var room = this.FetchRoom(roomId);
             if (room is null)
@@ -149,10 +278,10 @@ namespace BililiveRecorder.Web.Api
         /// </summary>
         /// <param name="roomId"></param>
         /// <returns></returns>
-        [HttpGet("{roomId:int}/stats")]
+        [HttpGet("{roomId:long}/stats")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(RestApiError), StatusCodes.Status404NotFound)]
-        public ActionResult<RoomRecordingStatsDto> GetRoomRecordingStats(int roomId)
+        public ActionResult<RoomRecordingStatsDto> GetRoomRecordingStats(long roomId)
         {
             var room = this.FetchRoom(roomId);
             if (room is null)
@@ -181,10 +310,10 @@ namespace BililiveRecorder.Web.Api
         /// </summary>
         /// <param name="roomId"></param>
         /// <returns></returns>
-        [HttpGet("{roomId:int}/ioStats")]
+        [HttpGet("{roomId:long}/ioStats")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(RestApiError), StatusCodes.Status404NotFound)]
-        public ActionResult<RoomIOStatsDto> GetRoomIOStats(int roomId)
+        public ActionResult<RoomIOStatsDto> GetRoomIOStats(long roomId)
         {
             var room = this.FetchRoom(roomId);
             if (room is null)
@@ -216,10 +345,10 @@ namespace BililiveRecorder.Web.Api
         /// </summary>
         /// <param name="roomId"></param>
         /// <returns></returns>
-        [HttpGet("{roomId:int}/config")]
+        [HttpGet("{roomId:long}/config")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(RestApiError), StatusCodes.Status404NotFound)]
-        public ActionResult<RoomConfigDto> GetRoomConfig(int roomId)
+        public ActionResult<RoomConfigDto> GetRoomConfig(long roomId)
         {
             var room = this.FetchRoom(roomId);
             if (room is null)
@@ -249,10 +378,10 @@ namespace BililiveRecorder.Web.Api
         /// <param name="roomId"></param>
         /// <param name="config"></param>
         /// <returns></returns>
-        [HttpPost("{roomId:int}/config")]
+        [HttpPost("{roomId:long}/config")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(RestApiError), StatusCodes.Status404NotFound)]
-        public ActionResult<RoomConfigDto> SetRoomConfig(int roomId, [FromBody] SetRoomConfig config)
+        public ActionResult<RoomConfigDto> SetRoomConfig(long roomId, [FromBody] SetRoomConfig config)
         {
             var room = this.FetchRoom(roomId);
             if (room is null)
@@ -295,10 +424,10 @@ namespace BililiveRecorder.Web.Api
         /// </summary>
         /// <param name="roomId"></param>
         /// <returns></returns>
-        [HttpPost("{roomId:int}/start")]
+        [HttpPost("{roomId:long}/start")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(RestApiError), StatusCodes.Status404NotFound)]
-        public ActionResult<RoomDto> StartRecording(int roomId)
+        public ActionResult<RoomDto> StartRecording(long roomId)
         {
             var room = this.FetchRoom(roomId);
             if (room is null)
@@ -333,10 +462,10 @@ namespace BililiveRecorder.Web.Api
         /// </summary>
         /// <param name="roomId"></param>
         /// <returns></returns>
-        [HttpPost("{roomId:int}/stop")]
+        [HttpPost("{roomId:long}/stop")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(RestApiError), StatusCodes.Status404NotFound)]
-        public ActionResult<RoomDto> StopRecording(int roomId)
+        public ActionResult<RoomDto> StopRecording(long roomId)
         {
             var room = this.FetchRoom(roomId);
             if (room is null)
@@ -371,10 +500,10 @@ namespace BililiveRecorder.Web.Api
         /// </summary>
         /// <param name="roomId"></param>
         /// <returns></returns>
-        [HttpPost("{roomId:int}/split")]
+        [HttpPost("{roomId:long}/split")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(RestApiError), StatusCodes.Status404NotFound)]
-        public ActionResult<RoomDto> SplitRecording(int roomId)
+        public ActionResult<RoomDto> SplitRecording(long roomId)
         {
             var room = this.FetchRoom(roomId);
             if (room is null)
@@ -409,10 +538,10 @@ namespace BililiveRecorder.Web.Api
         /// </summary>
         /// <param name="roomId"></param>
         /// <returns></returns>
-        [HttpPost("{roomId:int}/refresh")]
+        [HttpPost("{roomId:long}/refresh")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(typeof(RestApiError), StatusCodes.Status404NotFound)]
-        public async Task<ActionResult<RoomDto>> RefreshRecordingAsync(int roomId)
+        public async Task<ActionResult<RoomDto>> RefreshRecordingAsync(long roomId)
         {
             var room = this.FetchRoom(roomId);
             if (room is null)

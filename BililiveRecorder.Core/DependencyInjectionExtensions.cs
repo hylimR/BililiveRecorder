@@ -41,6 +41,7 @@ namespace BililiveRecorder.DependencyInjection
             .AddSingleton<PolicyWrappedApiClient<HttpApiClient>>()
             .AddSingleton<IApiClient>(sp => sp.GetRequiredService<PolicyWrappedApiClient<HttpApiClient>>())
             .AddSingleton<IDanmakuServerApiClient>(sp => sp.GetRequiredService<PolicyWrappedApiClient<HttpApiClient>>())
+            .AddSingleton<IPlatformApiClientFactory, PlatformApiClientFactory>()
             .AddScoped<IDanmakuClient, DanmakuClient>()
             ;
 
@@ -49,6 +50,7 @@ namespace BililiveRecorder.DependencyInjection
             .AddScoped<IFlvProcessingContextWriterFactory, FlvProcessingContextWriterWithFileWriterFactory>()
             .AddScoped<IFlvTagReaderFactory, FlvTagReaderFactory>()
             .AddScoped<ITagGroupReaderFactory, TagGroupReaderFactory>()
+            .AddScoped<Flv.Pipeline.IProcessingPipelineBuilder, Flv.Pipeline.ProcessingPipelineBuilder>()
             ;
     }
 }

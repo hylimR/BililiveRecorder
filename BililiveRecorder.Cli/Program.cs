@@ -168,37 +168,90 @@ namespace BililiveRecorder.Cli
 
             path = Path.GetFullPath(path);
 
-            ConfigV3? config;
+            // Check if PostgreSQL config is requested via environment variables
+            var configType = Environment.GetEnvironmentVariable("BREC_CONFIG_TYPE");
+            var usePostgreSql = !string.IsNullOrEmpty(configType) && configType.Equals("PostgreSQL", StringComparison.OrdinalIgnoreCase);
 
-            if (args.ConfigOverride is not null)
+            IServiceProvider serviceProvider;
+
+            if (usePostgreSql)
             {
-                if (Directory.Exists(args.ConfigOverride))
+#if NET8_0_OR_GREATER
+                logger.Information("PostgreSQL config mode detected from environment variable");
+
+                // Build PostgreSQL connection string from environment variables
+                var dbHost = Environment.GetEnvironmentVariable("BREC_DB_HOST") ?? "localhost";
+                var dbPort = Environment.GetEnvironmentVariable("BREC_DB_PORT") ?? "5432";
+                var dbName = Environment.GetEnvironmentVariable("BREC_DB_NAME") ?? "bililiverecorder";
+                var dbUser = Environment.GetEnvironmentVariable("BREC_DB_USER") ?? "recorder";
+                var dbPassword = Environment.GetEnvironmentVariable("BREC_DB_PASSWORD");
+                var dbSchema = Environment.GetEnvironmentVariable("BREC_DB_SCHEMA") ?? "recorder";
+
+                if (string.IsNullOrEmpty(dbPassword))
                 {
-                    var overrideFile = Path.Combine(args.ConfigOverride, "config.json");
-                    logger.Information("Using config from {ConfigOverride}", overrideFile);
-                    config = ConfigParser.LoadFromFile(overrideFile);
+                    logger.Error("PostgreSQL password not set (BREC_DB_PASSWORD environment variable)");
+                    return -1;
                 }
-                else
-                {
-                    logger.Information("Using config from {ConfigOverride}", args.ConfigOverride);
-                    config = ConfigParser.LoadFromFile(args.ConfigOverride);
-                }
+
+                var connectionString = $"Host={dbHost};Port={dbPort};Database={dbName};Username={dbUser};Password={dbPassword};Search Path={dbSchema}";
+                logger.Information("PostgreSQL connection configured: Host={Host}, Database={Database}, Schema={Schema}", dbHost, dbName, dbSchema);
+
+                // Check if migration from file is requested
+                var migrateFromFile = Environment.GetEnvironmentVariable("BREC_MIGRATE_FROM_FILE");
+                var shouldMigrate = !string.IsNullOrEmpty(migrateFromFile) &&
+                                  (migrateFromFile.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                                   migrateFromFile.Equals("1"));
+
+                // Create service provider with PostgreSQL config
+                serviceProvider = BuildServiceProviderWithPostgreSql(connectionString, logger, shouldMigrate, path);
+#else
+                logger.Error("PostgreSQL config is only supported on .NET 8.0 or later");
+                return -1;
+#endif
             }
             else
             {
-                config = ConfigParser.LoadFromDirectory(path);
+                // Original file-based config logic
+                ConfigV3? config;
+
+                if (args.ConfigOverride is not null)
+                {
+                    if (Directory.Exists(args.ConfigOverride))
+                    {
+                        var overrideFile = Path.Combine(args.ConfigOverride, "config.json");
+                        logger.Information("Using config from {ConfigOverride}", overrideFile);
+                        config = ConfigParser.LoadFromFile(overrideFile);
+                    }
+                    else
+                    {
+                        logger.Information("Using config from {ConfigOverride}", args.ConfigOverride);
+                        config = ConfigParser.LoadFromFile(args.ConfigOverride);
+                    }
+                }
+                else
+                {
+                    config = ConfigParser.LoadFromDirectory(path);
+                }
+
+                if (config is null)
+                {
+                    logger.Error("Config Loading Failed");
+                    return -1;
+                }
+
+                config.Global.WorkDirectory = path;
+                config.ConfigPathOverride = args.ConfigOverride;
+
+                // Standardize room configs to use RoomUrl format (converts old RoomId-only format)
+                if (BililiveRecorder.Core.Config.ConfigStandardizationHelper.NeedsStandardization(config))
+                {
+                    logger.Information("Standardizing room configurations to RoomUrl format");
+                    BililiveRecorder.Core.Config.ConfigStandardizationHelper.StandardizeRoomConfigs(config, logger);
+                    ConfigParser.Save(config); // Save standardized config
+                }
+
+                serviceProvider = BuildServiceProvider(config, logger);
             }
-
-            if (config is null)
-            {
-                logger.Error("Config Loading Failed");
-                return -1;
-            }
-
-            config.Global.WorkDirectory = path;
-            config.ConfigPathOverride = args.ConfigOverride;
-
-            var serviceProvider = BuildServiceProvider(config, logger);
 
             return await RunRecorderAsync(serviceProvider, args);
         }
@@ -499,6 +552,82 @@ namespace BililiveRecorder.Cli
             .AddRecorderConfig(config)
             .AddRecorder()
             .BuildServiceProvider();
+
+#if NET8_0_OR_GREATER
+        private static IServiceProvider BuildServiceProviderWithPostgreSql(string connectionString, ILogger logger, bool migrateFromFile, string workDirectory)
+        {
+            logger.Information("Using PostgreSQL-based config persistence");
+
+            // Create PostgreSQL persistence
+            var dbPersistence = new BililiveRecorder.Core.Config.Persistence.Database.PostgreSqlConfigPersistence(connectionString, logger);
+
+            // Initialize database
+            if (!dbPersistence.Initialize())
+            {
+                throw new Exception("Failed to initialize PostgreSQL database for config persistence");
+            }
+
+            // Migrate from file if requested
+            if (migrateFromFile && !string.IsNullOrEmpty(workDirectory))
+            {
+                logger.Information("Attempting to migrate config from file ({FileDirectory}) to PostgreSQL database", workDirectory);
+                var filePersistence = new BililiveRecorder.Core.Config.Persistence.FileConfigPersistence(workDirectory, logger);
+
+                if (filePersistence.IsAvailable())
+                {
+                    logger.Information("Config file found, starting migration process");
+
+                    // Create backup before migration
+                    var fileConfig = filePersistence.Load();
+                    if (fileConfig != null)
+                    {
+                        var backupPath = System.IO.Path.Combine(workDirectory, $"config_backup_{DateTime.Now:yyyyMMdd_HHmmss}.json");
+                        BililiveRecorder.Core.Config.Persistence.ConfigMigrationHelper.BackupToFile(fileConfig, backupPath, logger);
+                        logger.Information("Config backup created at: {BackupPath}", backupPath);
+                    }
+
+                    // Perform migration
+                    if (BililiveRecorder.Core.Config.Persistence.ConfigMigrationHelper.MigrateConfig(filePersistence, dbPersistence, logger))
+                    {
+                        logger.Information("Config migration from file to database completed successfully");
+                    }
+                    else
+                    {
+                        logger.Warning("Config migration from file to database failed, using database config");
+                    }
+                }
+                else
+                {
+                    logger.Information("No config file found to migrate, using database config");
+                }
+            }
+
+            // Load config from database
+            var configParser = new BililiveRecorder.Core.Config.ConfigParserV2(dbPersistence, logger);
+            var config = configParser.Load() ?? new ConfigV3();
+            config.Global.WorkDirectory = workDirectory;
+
+            // Standardize room configs to use RoomUrl format (converts old RoomId-only format)
+            if (BililiveRecorder.Core.Config.ConfigStandardizationHelper.NeedsStandardization(config))
+            {
+                logger.Information("Standardizing room configurations to RoomUrl format");
+                BililiveRecorder.Core.Config.ConfigStandardizationHelper.StandardizeRoomConfigs(config, logger);
+                configParser.Save(config); // Save standardized config
+            }
+
+            // Store the configParser as a singleton so ConfigParser.Save can use it
+            // This is a workaround since we can't easily inject into the Recorder constructor
+            BililiveRecorder.Core.Config.ConfigParserV2.SetGlobalInstance(configParser);
+
+            // Build service provider with the config
+            return new ServiceCollection()
+                .AddSingleton(logger)
+                .AddFlv()
+                .AddRecorderConfig(config)
+                .AddRecorder()
+                .BuildServiceProvider();
+        }
+#endif
 
         private static Logger BuildLogger(LogEventLevel logLevel, LogEventLevel logFileLevel, bool enableWebLog = false)
         {

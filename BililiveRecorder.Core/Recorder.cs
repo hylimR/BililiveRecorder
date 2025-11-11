@@ -19,14 +19,16 @@ namespace BililiveRecorder.Core
         private readonly ILogger logger;
         private readonly BasicWebhookV1 basicWebhookV1;
         private readonly BasicWebhookV2 basicWebhookV2;
+        private readonly Action<ConfigV3>? saveConfigAction;
 
         private bool disposedValue;
 
-        public Recorder(IRoomFactory roomFactory, ConfigV3 config, ILogger logger)
+        public Recorder(IRoomFactory roomFactory, ConfigV3 config, ILogger logger, Action<ConfigV3>? saveConfigAction = null)
         {
             this.roomFactory = roomFactory ?? throw new ArgumentNullException(nameof(roomFactory));
             this.Config = config ?? throw new ArgumentNullException(nameof(config));
             this.logger = logger?.ForContext<Recorder>() ?? throw new ArgumentNullException(nameof(logger));
+            this.saveConfigAction = saveConfigAction;
             this.roomCollection = new ObservableCollection<IRoom>();
             this.Rooms = new ReadOnlyObservableCollection<IRoom>(this.roomCollection);
 
@@ -61,14 +63,28 @@ namespace BililiveRecorder.Core
 
         public ReadOnlyObservableCollection<IRoom> Rooms { get; }
 
-        public IRoom AddRoom(int roomid) => this.AddRoom(roomid, true);
+        public IRoom AddRoom(long roomid) => this.AddRoom(roomid, true);
 
-        public IRoom AddRoom(int roomid, bool enabled)
+        public IRoom AddRoom(long roomid, bool enabled)
         {
             lock (this.lockObject)
             {
                 this.logger.Debug("AddRoom {RoomId}, AutoRecord: {AutoRecord}", roomid, enabled);
                 var roomConfig = new RoomConfig { RoomId = roomid, AutoRecord = enabled };
+                var room = this.AddRoom(roomConfig, 0);
+                this.SaveConfig();
+                return room;
+            }
+        }
+
+        public IRoom AddRoom(string roomUrl) => this.AddRoom(roomUrl, true);
+
+        public IRoom AddRoom(string roomUrl, bool enabled)
+        {
+            lock (this.lockObject)
+            {
+                this.logger.Debug("AddRoom {RoomUrl}, AutoRecord: {AutoRecord}", roomUrl, enabled);
+                var roomConfig = new RoomConfig { RoomUrl = roomUrl, AutoRecord = enabled };
                 var room = this.AddRoom(roomConfig, 0);
                 this.SaveConfig();
                 return room;
@@ -120,7 +136,16 @@ namespace BililiveRecorder.Core
         public void SaveConfig()
         {
             this.Config.Rooms = this.Rooms.Select(x => x.RoomConfig).ToList();
-            ConfigParser.Save(this.Config);
+
+            // Use custom save action if provided (e.g., for PostgreSQL), otherwise use default file-based save
+            if (this.saveConfigAction != null)
+            {
+                this.saveConfigAction(this.Config);
+            }
+            else
+            {
+                ConfigParser.Save(this.Config);
+            }
         }
 
         #region Events

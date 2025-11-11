@@ -16,10 +16,10 @@ namespace BililiveRecorder.Core.Config.V3
         /// <summary>
         /// 房间号
         /// </summary>
-        public int RoomId { get => this.GetPropertyValue<int>(); set => this.SetPropertyValue(value); }
-        public bool HasRoomId { get => this.GetPropertyHasValue(nameof(this.RoomId)); set => this.SetPropertyHasValue<int>(value, nameof(this.RoomId)); }
+        public long RoomId { get => this.GetPropertyValue<long>(); set => this.SetPropertyValue(value); }
+        public bool HasRoomId { get => this.GetPropertyHasValue(nameof(this.RoomId)); set => this.SetPropertyHasValue<long>(value, nameof(this.RoomId)); }
         [JsonProperty(nameof(RoomId)), EditorBrowsable(EditorBrowsableState.Never)]
-        public Optional<int> OptionalRoomId { get => this.GetPropertyValueOptional<int>(nameof(this.RoomId)); set => this.SetPropertyValueOptional(value, nameof(this.RoomId)); }
+        public Optional<long> OptionalRoomId { get => this.GetPropertyValueOptional<long>(nameof(this.RoomId)); set => this.SetPropertyValueOptional(value, nameof(this.RoomId)); }
 
         /// <summary>
         /// 自动录制
@@ -245,6 +245,21 @@ namespace BililiveRecorder.Core.Config.V3
         /// 自定义脚本
         /// </summary>
         public string? UserScript => this.GetPropertyValue<string>();
+
+        /// <summary>
+        /// 启用转推功能
+        /// </summary>
+        public bool RestreamEnabled => this.GetPropertyValue<bool>();
+
+        /// <summary>
+        /// 转推RTMP服务器地址
+        /// </summary>
+        public string? RestreamRtmpUrl => this.GetPropertyValue<string>();
+
+        /// <summary>
+        /// 转推推流密钥
+        /// </summary>
+        public string? RestreamStreamKey => this.GetPropertyValue<string>();
 
     }
 
@@ -531,6 +546,30 @@ namespace BililiveRecorder.Core.Config.V3
         [JsonProperty(nameof(UserScript)), EditorBrowsable(EditorBrowsableState.Never)]
         public Optional<string?> OptionalUserScript { get => this.GetPropertyValueOptional<string>(nameof(this.UserScript)); set => this.SetPropertyValueOptional(value, nameof(this.UserScript)); }
 
+        /// <summary>
+        /// 启用转推功能
+        /// </summary>
+        public bool RestreamEnabled { get => this.GetPropertyValue<bool>(); set => this.SetPropertyValue(value); }
+        public bool HasRestreamEnabled { get => this.GetPropertyHasValue(nameof(this.RestreamEnabled)); set => this.SetPropertyHasValue<bool>(value, nameof(this.RestreamEnabled)); }
+        [JsonProperty(nameof(RestreamEnabled)), EditorBrowsable(EditorBrowsableState.Never)]
+        public Optional<bool> OptionalRestreamEnabled { get => this.GetPropertyValueOptional<bool>(nameof(this.RestreamEnabled)); set => this.SetPropertyValueOptional(value, nameof(this.RestreamEnabled)); }
+
+        /// <summary>
+        /// 转推RTMP服务器地址
+        /// </summary>
+        public string? RestreamRtmpUrl { get => this.GetPropertyValue<string>(); set => this.SetPropertyValue(value); }
+        public bool HasRestreamRtmpUrl { get => this.GetPropertyHasValue(nameof(this.RestreamRtmpUrl)); set => this.SetPropertyHasValue<string>(value, nameof(this.RestreamRtmpUrl)); }
+        [JsonProperty(nameof(RestreamRtmpUrl)), EditorBrowsable(EditorBrowsableState.Never)]
+        public Optional<string?> OptionalRestreamRtmpUrl { get => this.GetPropertyValueOptional<string>(nameof(this.RestreamRtmpUrl)); set => this.SetPropertyValueOptional(value, nameof(this.RestreamRtmpUrl)); }
+
+        /// <summary>
+        /// 转推推流密钥
+        /// </summary>
+        public string? RestreamStreamKey { get => this.GetPropertyValue<string>(); set => this.SetPropertyValue(value); }
+        public bool HasRestreamStreamKey { get => this.GetPropertyHasValue(nameof(this.RestreamStreamKey)); set => this.SetPropertyHasValue<string>(value, nameof(this.RestreamStreamKey)); }
+        [JsonProperty(nameof(RestreamStreamKey)), EditorBrowsable(EditorBrowsableState.Never)]
+        public Optional<string?> OptionalRestreamStreamKey { get => this.GetPropertyValueOptional<string>(nameof(this.RestreamStreamKey)); set => this.SetPropertyValueOptional(value, nameof(this.RestreamStreamKey)); }
+
     }
 
     public sealed partial class DefaultConfig
@@ -604,9 +643,15 @@ namespace BililiveRecorder.Core.Config.V3
 
         public bool NetworkTransportUseSystemProxy => false;
 
-        public AllowedAddressFamily NetworkTransportAllowedAddressFamily => AllowedAddressFamily.Any;
+        public AllowedAddressFamily NetworkTransportAllowedAddressFamily => AllowedAddressFamily.Ipv4;
 
         public string UserScript => @"";
+
+        public bool RestreamEnabled => false;
+
+        public string RestreamRtmpUrl => @"";
+
+        public string RestreamStreamKey => @"";
 
     }
 

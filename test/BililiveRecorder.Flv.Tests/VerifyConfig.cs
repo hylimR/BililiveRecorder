@@ -21,7 +21,7 @@ namespace BililiveRecorder.Flv.Tests
                 return Expectations.Initialize(sourceFile, projectDirectory, type, method);
             });
             VerifierSettings.IgnoreMembersWithType<Stream>();
-            DiffRunner.Disabled = false;
+            DiffRunner.Disabled = true;  // Disable auto-launching diff tools to prevent opening VSCode/editors during test runs
             DiffTools.UseOrder(DiffTool.VisualStudioCode, DiffTool.Rider, DiffTool.WinMerge, DiffTool.VisualStudio);
         }
     }

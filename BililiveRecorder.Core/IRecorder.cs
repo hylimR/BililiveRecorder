@@ -19,8 +19,10 @@ namespace BililiveRecorder.Core
         event EventHandler<AggregatedRoomEventArgs<RecordingStatsEventArgs>>? RecordingStats;
         event EventHandler<IRoom> StreamStarted;
 
-        IRoom AddRoom(int roomid);
-        IRoom AddRoom(int roomid, bool enabled);
+        IRoom AddRoom(long roomid);
+        IRoom AddRoom(long roomid, bool enabled);
+        IRoom AddRoom(string roomUrl);
+        IRoom AddRoom(string roomUrl, bool enabled);
         void RemoveRoom(IRoom room);
 
         void SaveConfig();

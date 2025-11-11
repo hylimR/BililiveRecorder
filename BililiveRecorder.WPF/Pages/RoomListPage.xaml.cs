@@ -154,70 +154,100 @@ namespace BililiveRecorder.WPF.Pages
             var input = e.Trim();
             if (string.IsNullOrWhiteSpace(input) || this.DataContext is not IRecorder rec) return;
 
-            if (!int.TryParse(input, out var roomid))
+            // Try to parse as integer first (for Bilibili numeric room IDs)
+            if (int.TryParse(input, out var roomid))
             {
-                var m = RoomIdFromUrl.Regex.Match(input);
-                if (m.Success && m.Groups.Count > 1 && int.TryParse(m.Groups[1].Value, out var result2))
-                {
-                    roomid = result2;
-                }
-                else
+                // Validate integer room ID
+                if (roomid < 0)
                 {
                     try
                     {
                         await new AddRoomFailedDialog
                         {
-                            DataContext = AddRoomFailedDialog.AddRoomFailedErrorText.InvalidInput,
+                            DataContext = AddRoomFailedDialog.AddRoomFailedErrorText.RoomIdNegative,
                             Owner = Application.Current.MainWindow
                         }.ShowAndDisableMinimizeToTrayAsync();
                     }
                     catch (Exception) { }
                     return;
                 }
-            }
-
-            if (roomid < 0)
-            {
-                try
+                else if (roomid == 0)
                 {
-                    await new AddRoomFailedDialog
+                    try
                     {
-                        DataContext = AddRoomFailedDialog.AddRoomFailedErrorText.RoomIdNegative,
-                        Owner = Application.Current.MainWindow
-                    }.ShowAndDisableMinimizeToTrayAsync();
+                        await new AddRoomFailedDialog
+                        {
+                            DataContext = AddRoomFailedDialog.AddRoomFailedErrorText.RoomIdZero,
+                            Owner = Application.Current.MainWindow
+                        }.ShowAndDisableMinimizeToTrayAsync();
+                    }
+                    catch (Exception) { }
+                    return;
                 }
-                catch (Exception) { }
-                return;
-            }
-            else if (roomid == 0)
-            {
-                try
-                {
-                    await new AddRoomFailedDialog
-                    {
-                        DataContext = AddRoomFailedDialog.AddRoomFailedErrorText.RoomIdZero,
-                        Owner = Application.Current.MainWindow
-                    }.ShowAndDisableMinimizeToTrayAsync();
-                }
-                catch (Exception) { }
-                return;
-            }
 
-            if (rec.Rooms.Any(x => x.RoomConfig.RoomId == roomid || x.ShortId == roomid))
-            {
-                try
+                // Check for duplicates
+                if (rec.Rooms.Any(x => x.RoomConfig.RoomId == roomid || x.ShortId == roomid))
                 {
-                    await new AddRoomFailedDialog
+                    try
                     {
-                        DataContext = AddRoomFailedDialog.AddRoomFailedErrorText.Duplicate,
-                        Owner = Application.Current.MainWindow
-                    }.ShowAndDisableMinimizeToTrayAsync();
+                        await new AddRoomFailedDialog
+                        {
+                            DataContext = AddRoomFailedDialog.AddRoomFailedErrorText.Duplicate,
+                            Owner = Application.Current.MainWindow
+                        }.ShowAndDisableMinimizeToTrayAsync();
+                    }
+                    catch (Exception) { }
+                    return;
                 }
-                catch (Exception) { }
-                return;
-            }
 
-            rec.AddRoom(roomid);
+                rec.AddRoom(roomid);
+            }
+            else
+            {
+                // Try to extract Bilibili room ID from URL
+                var m = RoomIdFromUrl.Regex.Match(input);
+                if (m.Success && m.Groups.Count > 1 && int.TryParse(m.Groups[1].Value, out var bilibiliRoomId))
+                {
+                    // Check for duplicates
+                    if (rec.Rooms.Any(x => x.RoomConfig.RoomId == bilibiliRoomId || x.ShortId == bilibiliRoomId))
+                    {
+                        try
+                        {
+                            await new AddRoomFailedDialog
+                            {
+                                DataContext = AddRoomFailedDialog.AddRoomFailedErrorText.Duplicate,
+                                Owner = Application.Current.MainWindow
+                            }.ShowAndDisableMinimizeToTrayAsync();
+                        }
+                        catch (Exception) { }
+                        return;
+                    }
+
+                    rec.AddRoom(bilibiliRoomId);
+                }
+                else
+                {
+                    // Assume it's a URL for other platforms (e.g., Douyin)
+                    // Check for duplicate URLs
+                    if (rec.Rooms.Any(x => !string.IsNullOrEmpty(x.RoomConfig.RoomUrl) &&
+                                           x.RoomConfig.RoomUrl.Equals(input, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        try
+                        {
+                            await new AddRoomFailedDialog
+                            {
+                                DataContext = AddRoomFailedDialog.AddRoomFailedErrorText.Duplicate,
+                                Owner = Application.Current.MainWindow
+                            }.ShowAndDisableMinimizeToTrayAsync();
+                        }
+                        catch (Exception) { }
+                        return;
+                    }
+
+                    // Add room by URL
+                    rec.AddRoom(input);
+                }
+            }
         }
 
         private void MenuItem_EnableAutoRecAll_Click(object sender, RoutedEventArgs e)

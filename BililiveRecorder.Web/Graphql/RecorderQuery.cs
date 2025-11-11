@@ -30,12 +30,12 @@ namespace BililiveRecorder.Web.Graphql
 
             this.Field<ListGraphType<RoomType>>("rooms", arguments: new QueryArguments(
                     new QueryArgument<ListGraphType<IdGraphType>> { Name = "objectIds" },
-                    new QueryArgument<ListGraphType<IntGraphType>> { Name = "roomIds" }
+                    new QueryArgument<ListGraphType<LongGraphType>> { Name = "roomIds" }
                 ),
                 resolve: context =>
                 {
                     var objectIds = context.GetArgument<Guid[]>("objectIds");
-                    var roomIds = context.GetArgument<int[]>("roomIds");
+                    var roomIds = context.GetArgument<long[]>("roomIds");
 
                     // If no arguments are provided, return all rooms
                     if (objectIds == null && roomIds == null)
@@ -48,19 +48,19 @@ namespace BililiveRecorder.Web.Graphql
                     return this.recorder.Rooms.Where(x =>
                         (objectIds?.Contains(x.ObjectId) ?? false) ||
                         (roomIds?.Contains(x.RoomConfig.RoomId) ?? false) ||
-                        (roomIds?.Contains(x.ShortId) ?? false)
+                        (roomIds?.Contains((long)x.ShortId) ?? false)
                     );
                 });
 
             this.Field<RoomType>("room",
                 arguments: new QueryArguments(
                     new QueryArgument<IdGraphType> { Name = "objectId" },
-                    new QueryArgument<IntGraphType> { Name = "roomId" }
+                    new QueryArgument<LongGraphType> { Name = "roomId" }
                 ),
                 resolve: context =>
                 {
                     var objectId = context.GetArgument<Guid>("objectId");
-                    var roomId = context.GetArgument<int>("roomId");
+                    var roomId = context.GetArgument<long>("roomId");
 
                     IRoom? room;
                     if (objectId != default)

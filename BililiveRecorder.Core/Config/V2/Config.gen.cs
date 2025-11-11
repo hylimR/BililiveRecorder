@@ -16,10 +16,10 @@ namespace BililiveRecorder.Core.Config.V2
         /// <summary>
         /// 房间号
         /// </summary>
-        public int RoomId { get => this.GetPropertyValue<int>(); set => this.SetPropertyValue(value); }
-        public bool HasRoomId { get => this.GetPropertyHasValue(nameof(this.RoomId)); set => this.SetPropertyHasValue<int>(value, nameof(this.RoomId)); }
+        public long RoomId { get => this.GetPropertyValue<long>(); set => this.SetPropertyValue(value); }
+        public bool HasRoomId { get => this.GetPropertyHasValue(nameof(this.RoomId)); set => this.SetPropertyHasValue<long>(value, nameof(this.RoomId)); }
         [JsonProperty(nameof(RoomId)), EditorBrowsable(EditorBrowsableState.Never)]
-        public Optional<int> OptionalRoomId { get => this.GetPropertyValueOptional<int>(nameof(this.RoomId)); set => this.SetPropertyValueOptional(value, nameof(this.RoomId)); }
+        public Optional<long> OptionalRoomId { get => this.GetPropertyValueOptional<long>(nameof(this.RoomId)); set => this.SetPropertyValueOptional(value, nameof(this.RoomId)); }
 
         /// <summary>
         /// 自动录制

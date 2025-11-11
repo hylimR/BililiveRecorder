@@ -4,7 +4,7 @@ namespace BililiveRecorder.Core.Templating
 {
     public class FileNameTemplateContext
     {
-        public int RoomId { get; set; }
+        public long RoomId { get; set; }
 
         public int ShortId { get; set; }
 

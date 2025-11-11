@@ -16,6 +16,8 @@ namespace BililiveRecorder.Web.Models.Rest
                 .ForMember(x => x.AutoRecord, x => x.MapFrom(s => s.RoomConfig.AutoRecord))
                 .ForMember(x => x.IoStats, x => x.MapFrom(s => s.Stats))
                 .ForMember(x => x.RecordingStats, x => x.MapFrom(s => s.Stats))
+                .ForMember(x => x.RoomUrl, x => x.MapFrom(s => s.RoomConfig.RoomUrl))
+                .ForMember(x => x.Platform, x => x.MapFrom(s => s.RoomConfig.Platform.ToString()))
                 ;
 
             this.CreateMap<RoomStats, RoomRecordingStatsDto>()

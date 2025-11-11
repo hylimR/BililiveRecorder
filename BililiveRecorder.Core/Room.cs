@@ -37,6 +37,7 @@ namespace BililiveRecorder.Core
         private readonly ILogger loggerWithoutContext;
         private readonly IDanmakuClient danmakuClient;
         private readonly IApiClient apiClient;
+        private readonly IPlatformApiClientFactory platformApiClientFactory;
         private readonly IBasicDanmakuWriter basicDanmakuWriter;
         private readonly IRecordTaskFactory recordTaskFactory;
         private readonly UserScriptRunner userScriptRunner;
@@ -70,7 +71,7 @@ namespace BililiveRecorder.Core
             coverDownloadHttpClient.DefaultRequestHeaders.UserAgent.Clear();
         }
 
-        public Room(IServiceScope scope, RoomConfig roomConfig, int initDelayFactor, ILogger logger, IDanmakuClient danmakuClient, IApiClient apiClient, IBasicDanmakuWriter basicDanmakuWriter, IRecordTaskFactory recordTaskFactory, UserScriptRunner userScriptRunner)
+        public Room(IServiceScope scope, RoomConfig roomConfig, int initDelayFactor, ILogger logger, IDanmakuClient danmakuClient, IApiClient apiClient, IPlatformApiClientFactory platformApiClientFactory, IBasicDanmakuWriter basicDanmakuWriter, IRecordTaskFactory recordTaskFactory, UserScriptRunner userScriptRunner)
         {
             this.scope = scope ?? throw new ArgumentNullException(nameof(scope));
             this.RoomConfig = roomConfig ?? throw new ArgumentNullException(nameof(roomConfig));
@@ -78,6 +79,7 @@ namespace BililiveRecorder.Core
             this.logger = this.loggerWithoutContext.ForContext(LoggingContext.RoomId, this.RoomConfig.RoomId);
             this.danmakuClient = danmakuClient ?? throw new ArgumentNullException(nameof(danmakuClient));
             this.apiClient = apiClient ?? throw new ArgumentNullException(nameof(apiClient));
+            this.platformApiClientFactory = platformApiClientFactory ?? throw new ArgumentNullException(nameof(platformApiClientFactory));
             this.basicDanmakuWriter = basicDanmakuWriter ?? throw new ArgumentNullException(nameof(basicDanmakuWriter));
             this.recordTaskFactory = recordTaskFactory ?? throw new ArgumentNullException(nameof(recordTaskFactory));
             this.userScriptRunner = userScriptRunner ?? throw new ArgumentNullException(nameof(userScriptRunner));
@@ -194,7 +196,9 @@ namespace BililiveRecorder.Core
                 // 如果直播状态从 false 改成 true，Room_PropertyChanged 会触发录制
                 await this.FetchRoomInfoAsync().ConfigureAwait(false);
 
-                this.StartDamakuConnection(delay: false);
+                // Douyin does not support danmaku
+                if (this.RoomConfig.Platform != Api.StreamingPlatform.Douyin)
+                    this.StartDamakuConnection(delay: false);
             }
             catch (Exception ex)
             {
@@ -209,25 +213,73 @@ namespace BililiveRecorder.Core
         {
             if (this.disposedValue)
                 return;
-            var room = (await this.apiClient.GetRoomInfoAsync(this.RoomConfig.RoomId).ConfigureAwait(false)).Data;
-            if (room != null)
+
+            // Use platform-specific API client if RoomUrl is set, otherwise fall back to Bilibili
+            if (!string.IsNullOrEmpty(this.RoomConfig.RoomUrl))
             {
-                this.logger.Debug("拉取房间信息成功: {@room}", room);
+                using var platformClient = this.platformApiClientFactory.CreateClient(this.RoomConfig.Platform);
+                var platformRoomInfo = await platformClient.GetRoomInfoAsync(this.RoomConfig.NormalizedRoomIdentifier).ConfigureAwait(false);
 
-                this.RoomConfig.RoomId = room.Room.RoomId;
-                this.ShortId = room.Room.ShortId;
-                this.Uid = room.Room.Uid;
-                this.Title = room.Room.Title;
-                this.AreaNameParent = room.Room.ParentAreaName;
-                this.AreaNameChild = room.Room.AreaName;
-                this.Streaming = room.Room.LiveStatus == 1;
+                if (platformRoomInfo != null)
+                {
+                    this.logger.Debug("拉取房间信息成功 (Platform: {Platform}): {@roomInfo}", this.RoomConfig.Platform, platformRoomInfo);
 
-                this.Name = room.User.BaseInfo.Name;
+                    // Update RoomId based on platform
+                    if (this.RoomConfig.Platform == Api.StreamingPlatform.Bilibili)
+                    {
+                        // For Bilibili, use the room ID from API response
+                        if (long.TryParse(platformRoomInfo.RoomId, out var parsedRoomId))
+                        {
+                            this.RoomConfig.RoomId = parsedRoomId;
+                        }
+                    }
+                    else
+                    {
+                        // For non-Bilibili platforms (Douyin, etc.), use the room identifier from URL
+                        if (long.TryParse(this.RoomConfig.NormalizedRoomIdentifier, out var urlRoomId))
+                        {
+                            this.RoomConfig.RoomId = urlRoomId;
+                            this.logger.Debug("Set RoomId from URL: {RoomId}", urlRoomId);
+                        }
+                    }
 
-                this.RawBilibiliApiJsonData = room.RawBilibiliApiJsonData;
+                    this.ShortId = 0; // Platform-agnostic rooms don't have short IDs
+                    this.Uid = platformRoomInfo.Uid;
+                    this.Title = platformRoomInfo.Title;
+                    this.AreaNameParent = platformRoomInfo.AreaParent;
+                    this.AreaNameChild = platformRoomInfo.AreaChild;
+                    this.Streaming = platformRoomInfo.IsLive;
+                    this.Name = platformRoomInfo.AnchorName;
 
-                // allow danmaku client to connect
-                this.danmakuConnectHoldOff.Set();
+                    this.RawBilibiliApiJsonData = null; // Not applicable for non-Bilibili platforms
+
+                    // allow danmaku client to connect
+                    this.danmakuConnectHoldOff.Set();
+                }
+            }
+            else
+            {
+                // Original Bilibili logic
+                var room = (await this.apiClient.GetRoomInfoAsync((int)this.RoomConfig.RoomId).ConfigureAwait(false)).Data;
+                if (room != null)
+                {
+                    this.logger.Debug("拉取房间信息成功: {@room}", room);
+
+                    this.RoomConfig.RoomId = room.Room.RoomId;
+                    this.ShortId = room.Room.ShortId;
+                    this.Uid = room.Room.Uid;
+                    this.Title = room.Room.Title;
+                    this.AreaNameParent = room.Room.ParentAreaName;
+                    this.AreaNameChild = room.Room.AreaName;
+                    this.Streaming = room.Room.LiveStatus == 1;
+
+                    this.Name = room.User.BaseInfo.Name;
+
+                    this.RawBilibiliApiJsonData = room.RawBilibiliApiJsonData;
+
+                    // allow danmaku client to connect
+                    this.danmakuConnectHoldOff.Set();
+                }
             }
         }
 
@@ -284,7 +336,9 @@ namespace BililiveRecorder.Core
                     this.logger.Warning(ex, "检查标题是否匹配跳过录制正则表达式时出错");
                 }
 
-                var task = this.recordTaskFactory.CreateRecordTask(this, this.nextRecordShouldUseRawMode ? RecordMode.RawData : null);
+                // Automatically use RawData mode for Douyin (HLS streams) or when explicitly requested
+                var useRawMode = this.nextRecordShouldUseRawMode || this.RoomConfig.Platform == Api.StreamingPlatform.Douyin;
+                var task = this.recordTaskFactory.CreateRecordTask(this, useRawMode ? RecordMode.RawData : null);
                 this.nextRecordShouldUseRawMode = false;
 
                 task.IOStats += this.RecordTask_IOStats;
@@ -403,6 +457,11 @@ namespace BililiveRecorder.Core
             {
                 if (this.disposedValue)
                     return;
+
+                // Douyin does not support danmaku
+                if (this.RoomConfig.Platform == Api.StreamingPlatform.Douyin)
+                    return;
+
                 try
                 {
                     if (delay)
@@ -430,7 +489,14 @@ namespace BililiveRecorder.Core
                         return;
                     }
 
-                    await this.danmakuClient.ConnectAsync(this.RoomConfig.RoomId, this.RoomConfig.DanmakuTransport, this.ct).ConfigureAwait(false);
+                    // Get the actual room ID, preferring NormalizedRoomIdentifier if RoomUrl is set
+                    var roomIdForDanmaku = this.RoomConfig.RoomId;
+                    if (!string.IsNullOrEmpty(this.RoomConfig.RoomUrl) && long.TryParse(this.RoomConfig.NormalizedRoomIdentifier, out var normalizedId))
+                    {
+                        roomIdForDanmaku = normalizedId;
+                    }
+
+                    await this.danmakuClient.ConnectAsync((int)roomIdForDanmaku, this.RoomConfig.DanmakuTransport, this.ct).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -508,7 +574,8 @@ namespace BililiveRecorder.Core
         ///
         private void RecordTask_RecordFileOpening(object? sender, RecordFileOpeningEventArgs e)
         {
-            if (this.RoomConfig.RecordDanmaku)
+            // Douyin does not support danmaku
+            if (this.RoomConfig.RecordDanmaku && this.RoomConfig.Platform != Api.StreamingPlatform.Douyin)
                 this.basicDanmakuWriter.EnableWithPath(Path.ChangeExtension(e.FullPath, "xml"), this);
             else
                 this.basicDanmakuWriter.Disable();
@@ -676,7 +743,9 @@ namespace BililiveRecorder.Core
 
         private void Timer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
         {
-            this.StartDamakuConnection(delay: false);
+            // Douyin does not support danmaku
+            if (this.RoomConfig.Platform != Api.StreamingPlatform.Douyin)
+                this.StartDamakuConnection(delay: false);
 
             // 如果开启了自动录制 或者 还没有获取过第一次房间信息
             if (this.RoomConfig.AutoRecord || !this.danmakuConnectHoldOff.IsSet)

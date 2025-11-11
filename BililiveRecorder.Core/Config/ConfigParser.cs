@@ -99,6 +99,15 @@ namespace BililiveRecorder.Core.Config
 
         public static bool Save(V3.ConfigV3 config)
         {
+            // Check if a ConfigParserV2 global instance is set (e.g., for PostgreSQL)
+            var globalInstance = ConfigParserV2.GetGlobalInstance();
+            if (globalInstance != null)
+            {
+                logger.Debug("Using ConfigParserV2 global instance for save");
+                return globalInstance.Save(config);
+            }
+
+            // Otherwise use default file-based save
             var directory = config.Global.WorkDirectory;
 
             if (config.DisableConfigSave)

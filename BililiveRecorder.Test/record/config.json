@@ -1,0 +1,1 @@
+{"version":3,"global":{"RecordMode":{"HasValue":true},"FileNameRecordTemplate":{"HasValue":true,"Value":"{name}/录制-{roomid}-{date}-{time}-{ms}-{title}.flv"},"TimingCheckInterval":{"HasValue":true,"Value":10},"TimingApiTimeout":{"HasValue":true,"Value":10000},"TimingStreamRetry":{"HasValue":true,"Value":5}},"rooms":[]}

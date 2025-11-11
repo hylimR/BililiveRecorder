@@ -1,0 +1,16 @@
+{
+    "version": 3,
+    "global": {},
+    "rooms": [
+        {
+            "AutoRecord": { "HasValue": true, "Value": true, "279323257673" },
+            "Platform": 1,
+            "RoomUrl": "279323257673"
+        },
+        {
+            "RoomId": { "HasValue": true, "Value": 23527503 },
+            "AutoRecord": { "HasValue": true, "Value": true },
+            "RoomUrl": "23527503"
+        }
+    ]
+}
